@@ -331,3 +331,9 @@ async def test_signature_verifier_expired_nonce_cleanup():
     # Check that expired nonce has been cleaned up
     with core.database.get_db_session() as db:
         assert db.query(UsedNonce).filter(UsedNonce.nonce == "expired-nonce").count() == 0
+
+def test_signature_verifier_query_vectors():
+    from core.signature_verifier import normalize_query
+    for test_case in vector.get("queryEncodingVectors", []):
+        assert normalize_query(test_case["rawQuery"]) == test_case["normalized"]
+

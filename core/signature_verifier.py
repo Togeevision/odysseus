@@ -39,17 +39,7 @@ def normalize_query(query_str: str) -> str:
             .replace(")", "%29")\
             .replace("*", "%2A")
 
-    decoded_pairs = []
-    for k, v in pairs:
-        try:
-            # decode first to ensure canonical form
-            k_dec = urllib.parse.unquote(k.replace("+", "%20"))
-            v_dec = urllib.parse.unquote(v.replace("+", "%20"))
-            decoded_pairs.append((k_dec, v_dec))
-        except Exception:
-            decoded_pairs.append((k, v))
-
-    encoded_pairs = [(rfc3986(k), rfc3986(v)) for k, v in decoded_pairs]
+    encoded_pairs = [(rfc3986(k), rfc3986(v)) for k, v in pairs]
     encoded_pairs.sort(key=lambda x: (x[0], x[1]))
     return "&".join(f"{k}={v}" for k, v in encoded_pairs)
 
@@ -74,7 +64,15 @@ def build_canonical_request(
 
     segments = norm_path.split('/')
     for segment in segments:
-        if segment in ('.', '..') or urllib.parse.unquote(segment) in ('.', '..'):
+        if "%" in segment:
+            import re
+            for match in re.finditer(r'%(..)?', segment):
+                m = match.group(0)
+                if len(m) < 3 or not all(c in '0123456789abcdefABCDEF' for c in m[1:]):
+                    raise ValueError("Path contains malformed percent encoding")
+        
+        decoded = urllib.parse.unquote(segment)
+        if segment in ('.', '..') or decoded in ('.', '..'):
             raise ValueError("Path contains prohibited dot segments")
 
     norm_query = normalize_query(query)
