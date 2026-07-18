@@ -472,6 +472,17 @@ class Signature(TimestampMixin, Base):
     svg = Column(EncryptedText, nullable=True)         # vector signature, encrypted at rest
 
 
+class UsedNonce(Base):
+    """Ledger to track consumed nonces for HMAC replay protection."""
+    __tablename__ = "used_nonces"
+
+    nonce = Column(String, primary_key=True)
+    caller = Column(String, primary_key=True)
+    request_hash = Column(String, nullable=False)
+    used_at = Column(DateTime, default=utcnow_naive, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+
 class ApiToken(TimestampMixin, Base):
     """API tokens for external integrations (n8n, Make, etc.)."""
     __tablename__ = "api_tokens"

@@ -9,8 +9,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse
+from core.signature_verifier import require_togee_signature
 from pydantic import BaseModel, Field
 from core.middleware import INTERNAL_TOOL_USER
 from src.endpoint_resolver import resolve_endpoint
@@ -779,5 +780,98 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
             "name": new_name,
             "source_count": len(sources),
         }
+
+    # ------------------------------------------------------------------
+    # Secure HMAC internally-authenticated endpoints
+    # ------------------------------------------------------------------
+
+    @router.post("/api/research/jobs", dependencies=[Depends(require_togee_signature)])
+    async def create_research_job(body: ResearchStartRequest, request: Request):
+        session_id = f"rp-{uuid.uuid4().hex[:12]}"
+        effective_max_rounds = body.max_rounds if body.max_rounds > 0 else 20
+        
+        ep_url, ep_model, ep_headers = resolve_endpoint("research", owner="admin")
+        if not ep_url:
+            ep_url, ep_model, ep_headers = resolve_endpoint("utility", owner="admin")
+        if not ep_url:
+            ep_url, ep_model, ep_headers = resolve_endpoint("default", owner="admin")
+        if not ep_url:
+            ep_url, ep_model, ep_headers = resolve_endpoint("chat", owner="admin")
+
+        if not ep_url:
+            from src.database import SessionLocal
+            db = SessionLocal()
+            try:
+                ep = _owned_enabled_endpoint(db, "admin")
+                if ep:
+                    resolved = _resolve_endpoint_runtime(ep, owner="admin")
+                    if resolved:
+                        ep_url, ep_model, ep_headers = resolved
+            finally:
+                db.close()
+
+        if not ep_url:
+            raise HTTPException(400, "No endpoints configured. Add one in Settings first.")
+        if body.model:
+            ep_model = body.model
+
+        research_handler.start_research(
+            session_id=session_id,
+            query=body.query,
+            llm_endpoint=ep_url,
+            llm_model=ep_model,
+            max_time=body.max_time,
+            llm_headers=ep_headers,
+            max_rounds=effective_max_rounds,
+            search_provider=body.search_provider or None,
+            category=body.category or None,
+            extraction_timeout=body.extraction_timeout,
+            extraction_concurrency=body.extraction_concurrency,
+            owner="admin",
+        )
+        return {"session_id": session_id, "status": "running", "query": body.query}
+
+    @router.get("/api/research/jobs/status", dependencies=[Depends(require_togee_signature)])
+    async def get_research_job_status(session_id: str, request: Request):
+        _validate_session_id(session_id)
+        status = research_handler.get_status(session_id)
+        if status is None:
+            # Check completed reports
+            path = _find_research_path(session_id)
+            if path is not None:
+                try:
+                    d = json.loads(path.read_text(encoding="utf-8"))
+                    return {
+                        "status": "done",
+                        "result": d.get("result", ""),
+                        "sources": d.get("sources", []),
+                        "raw_findings": d.get("raw_findings", []),
+                    }
+                except Exception:
+                    pass
+            raise HTTPException(404, "No research found for this session")
+            
+        st = status.get("status")
+        if st in ("done", "error"):
+            result = research_handler.get_result(session_id)
+            sources = research_handler.get_sources(session_id) or []
+            raw_findings = research_handler.get_raw_findings(session_id) or []
+            return {
+                "status": st,
+                "result": result,
+                "sources": sources,
+                "raw_findings": raw_findings
+            }
+        return status
+
+    @router.post("/api/research/jobs/status", dependencies=[Depends(require_togee_signature)])
+    async def get_research_job_status_post(session_id: str, request: Request):
+        return await get_research_job_status(session_id, request)
+
+    @router.post("/api/research/jobs/cancel", dependencies=[Depends(require_togee_signature)])
+    async def cancel_research_job(session_id: str, request: Request):
+        _validate_session_id(session_id)
+        cancelled = research_handler.cancel_research(session_id)
+        return {"cancelled": cancelled}
 
     return router
