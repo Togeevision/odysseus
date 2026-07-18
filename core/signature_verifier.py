@@ -69,8 +69,13 @@ def build_canonical_request(
     
     if not norm_path.startswith('/'):
         raise ValueError("Path must begin with a single slash")
-    if '//' in norm_path or '/./' in norm_path or '/../' in norm_path:
+    if '//' in norm_path:
         raise ValueError("Path contains invalid dot segments or duplicate slashes")
+
+    segments = norm_path.split('/')
+    for segment in segments:
+        if segment in ('.', '..') or urllib.parse.unquote(segment) in ('.', '..'):
+            raise ValueError("Path contains prohibited dot segments")
 
     norm_query = normalize_query(query)
     norm_content_type = normalize_content_type(content_type)
