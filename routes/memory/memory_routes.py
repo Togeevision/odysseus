@@ -1,5 +1,6 @@
 # routes/memory_routes.py
-from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File, Depends
+from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import json
 import os
@@ -22,6 +23,7 @@ def _strip_list_prefix(text: str) -> str:
     return _LIST_PREFIX_RE.sub("", text, count=1).strip()
 
 from services.memory import MemoryManager
+from src.memory import get_text_similarity
 from core.session_manager import SessionManager
 from src.request_models import MemoryAddRequest
 from core.database import SessionLocal
@@ -31,8 +33,28 @@ from src.auth_helpers import get_current_user, require_user
 from src.endpoint_resolver import resolve_endpoint
 from src.task_endpoint import resolve_task_endpoint
 from src.upload_limits import read_upload_limited, MEMORY_IMPORT_MAX_BYTES
+from core.signature_verifier import require_togee_signature
 
 logger = logging.getLogger(__name__)
+
+
+class FindSimilarRequest(BaseModel):
+    text: str
+    threshold: float = 0.82
+
+
+def _similarity_of(entry):
+    """Pull a similarity score off a relevance hit."""
+    if not isinstance(entry, dict):
+        return None
+    for key in ("score", "similarity", "relevance"):
+        value = entry.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    distance = entry.get("distance")
+    if isinstance(distance, (int, float)):
+        return 1.0 - float(distance)
+    return None
 
 
 def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionManager, memory_vector=None):
@@ -150,6 +172,47 @@ def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionM
         relevant = memory_manager.get_relevant_memories(query, memories, threshold=0.05, max_items=20)
 
         return {"memories": relevant, "total": len(relevant), "query": query}
+
+    @router.post("/find-similar", dependencies=[Depends(require_togee_signature)])
+    def find_similar(body: FindSimilarRequest):
+        """Signed, session-less collision screen for machine callers.
+
+        The backend screens chronicle drafts here before publishing. A verdict
+        must be a verdict: if scores are unavailable, fail loudly rather than
+        answering "no collision".
+        """
+        text = (body.text or "").strip()
+        if not text:
+            raise HTTPException(400, "empty text")
+
+        scores = []
+        if memory_vector and memory_vector.healthy and memory_vector.count() > 0:
+            try:
+                hits = memory_vector.search(text, k=5)
+                for h in hits:
+                    s = _similarity_of(h)
+                    if s is not None:
+                        scores.append(s)
+            except Exception as err:
+                logger.warning("Vector search in find-similar failed: %s", err)
+
+        memories = memory_manager.load(owner="admin")
+        relevant = memory_manager.get_relevant_memories(
+            text, memories, threshold=0.0, max_items=5
+        )
+        for m in relevant:
+            if isinstance(m, dict) and m.get("text"):
+                scores.append(get_text_similarity(text, m["text"]))
+
+        if (relevant or (memory_vector and memory_vector.healthy and memory_vector.count() > 0)) and not scores:
+            raise HTTPException(500, "memory manager returned no similarity scores")
+
+        max_similarity = max(scores, default=0.0)
+        return {
+            "collision": max_similarity >= body.threshold,
+            "max_similarity": round(max_similarity, 4),
+            "matches": len(relevant),
+        }
 
     @router.get("/timeline")
     def memory_timeline(request: Request):
