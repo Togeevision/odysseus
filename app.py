@@ -273,6 +273,7 @@ if AUTH_ENABLED:
         "/api/compliance/check",
         "/api/research/sovereign-",
         "/api/memory/find-similar",
+        "/api/memory/add-sovereign",
     ]
     # Dynamic paths whose own handler proves identity via a path-embedded
     # secret instead of the session/bearer auth. The route handler at

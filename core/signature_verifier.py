@@ -18,6 +18,7 @@ CALLER_POLICIES = {
             "/api/research/jobs/status",
             "/api/research/jobs/cancel",
             "/api/memory/find-similar",
+            "/api/memory/add-sovereign",
         },
     },
 }

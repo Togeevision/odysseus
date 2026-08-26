@@ -43,6 +43,12 @@ class FindSimilarRequest(BaseModel):
     threshold: float = 0.82
 
 
+class AddSovereignRequest(BaseModel):
+    databaseKey: Optional[str] = None
+    caption: str
+    location: Optional[str] = None
+
+
 def _similarity_of(entry):
     """Pull a similarity score off a relevance hit."""
     if not isinstance(entry, dict):
@@ -212,6 +218,43 @@ def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionM
             "collision": max_similarity >= body.threshold,
             "max_similarity": round(max_similarity, 4),
             "matches": len(relevant),
+        }
+
+    @router.post("/add-sovereign")
+    def add_sovereign(body: AddSovereignRequest):
+        """Ingest a dispatch into sovereign memory under owner='admin'."""
+        db_key = (body.databaseKey or "").strip()
+        caption = (body.caption or "").strip()
+        location = (body.location or "").strip()
+
+        if not caption:
+            raise HTTPException(400, "empty caption")
+
+        text = f"[{db_key}] Location: {location} — {caption}" if db_key else f"Location: {location} — {caption}"
+
+        entry = memory_manager.add_entry(
+            text=text,
+            source="sovereign-dispatch",
+            category="fact",
+            owner="admin"
+        )
+        if db_key:
+            entry["database_key"] = db_key
+        if location:
+            entry["location"] = location
+
+        all_mem = memory_manager.load_all()
+        all_mem.append(entry)
+        memory_manager.save(all_mem)
+
+        if memory_vector and memory_vector.healthy:
+            memory_vector.add(entry["id"], text)
+
+        return {
+            "ok": True,
+            "id": entry["id"],
+            "text": text,
+            "count": len([m for m in all_mem if m.get("owner") == "admin"]),
         }
 
     @router.get("/timeline")
