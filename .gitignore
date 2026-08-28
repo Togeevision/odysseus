@@ -35,6 +35,7 @@ logs/
 *.sqlite3
 
 # Node
+.npm/
 node_modules/
 services/node_modules/
 services/data/
