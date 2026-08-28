@@ -45,7 +45,8 @@ class FindSimilarRequest(BaseModel):
 
 class AddSovereignRequest(BaseModel):
     databaseKey: Optional[str] = None
-    caption: str
+    text: Optional[str] = None
+    caption: Optional[str] = None
     location: Optional[str] = None
 
 
@@ -224,13 +225,20 @@ def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionM
     def add_sovereign(body: AddSovereignRequest):
         """Ingest a dispatch into sovereign memory under owner='admin'."""
         db_key = (body.databaseKey or "").strip()
+        raw_text = (body.text or "").strip()
         caption = (body.caption or "").strip()
         location = (body.location or "").strip()
 
-        if not caption:
-            raise HTTPException(400, "empty caption")
+        if not raw_text and not caption:
+            raise HTTPException(400, "empty text")
 
-        text = f"[{db_key}] Location: {location} — {caption}" if db_key else f"Location: {location} — {caption}"
+        # New machine callers send raw corpus text and keep routing facts as
+        # metadata. The caption fallback preserves compatibility with dispatch
+        # callers created before the raw-text contract existed.
+        text = raw_text or (
+            f"[{db_key}] Location: {location} — {caption}"
+            if db_key else f"Location: {location} — {caption}"
+        )
 
         entry = memory_manager.add_entry(
             text=text,
@@ -242,6 +250,11 @@ def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionM
             entry["database_key"] = db_key
         if location:
             entry["location"] = location
+        entry["metadata"] = {
+            "database_key": db_key or None,
+            "location": location or None,
+            "text_shape": "raw" if raw_text else "legacy-caption",
+        }
 
         all_mem = memory_manager.load_all()
         all_mem.append(entry)
