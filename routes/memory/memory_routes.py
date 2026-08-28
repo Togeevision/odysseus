@@ -220,7 +220,7 @@ def setup_memory_routes(memory_manager: MemoryManager, session_manager: SessionM
             "matches": len(relevant),
         }
 
-    @router.post("/add-sovereign")
+    @router.post("/add-sovereign", dependencies=[Depends(require_togee_signature)])
     def add_sovereign(body: AddSovereignRequest):
         """Ingest a dispatch into sovereign memory under owner='admin'."""
         db_key = (body.databaseKey or "").strip()
